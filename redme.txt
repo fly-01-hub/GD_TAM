@@ -37,6 +37,21 @@ GD_TAM/
 
 模型权重已经随项目提供，正常情况下不需要重新下载。
 
+从 GitHub 克隆本项目时，需要先安装 Git LFS，否则两个大模型权重可能只会下载成
+很小的指针文本文件。Ubuntu/Debian 可执行：
+
+    sudo apt install -y git-lfs
+    git lfs install
+    git clone https://github.com/fly-01-hub/GD_TAM.git
+    cd GD_TAM
+    git lfs pull
+
+克隆完成后，可用下面的命令确认权重不是指针文件：
+
+    ls -lh checkpoints/efficienttam_s.pt checkpoints/groundingdino_swint_ogc.pth
+
+两个文件的正常大小分别约为 131 MB 和 662 MB（不同工具的 MB/MiB 显示略有差异）。
+
 
 三、推荐运行环境
 ----------------
