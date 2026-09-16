@@ -1,0 +1,329 @@
+GD_TAM 项目使用说明
+====================
+
+一、项目用途
+------------
+
+本项目实现一个“文本检测 + 视频目标分割/跟踪 + 几何拟合”的视觉前端：
+
+1. GroundingDINO 根据英文文本提示，在第 0 帧检测目标并给出边界框；
+2. EfficientTAM 以该边界框为提示，在后续视频帧中传播目标掩码；
+3. OpenCV 对每帧最大掩码轮廓拟合椭圆；
+4. 保存带掩码、椭圆和中心点的可视化图片，并将几何参数保存为 JSON。
+
+项目主入口：front_end_unit_test.py
+
+
+二、目录中已经提供的关键文件
+------------------------------
+
+GD_TAM/
+├── front_end_unit_test.py                  主运行脚本
+├── EfficientTAM/                           EfficientTAM 源码
+├── GroundingDINO/                          GroundingDINO 源码
+├── checkpoints/
+│   ├── efficienttam_s.pt                   EfficientTAM 权重，约 131 MB
+│   └── groundingdino_swint_ogc.pth         GroundingDINO 权重，约 662 MB
+├── data/
+│   ├── raw_videos/1.mp4                    随项目提供的测试视频
+│   └── test_frames/                        待处理的 JPEG 帧目录
+├── outputs/test_results/                   运行结果目录
+└── redme.txt                               本说明
+
+当前代码实际使用的配置文件为：
+
+- GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py
+- EfficientTAM/efficient_track_anything/configs/efficienttam/efficienttam_s.yaml
+
+模型权重已经随项目提供，正常情况下不需要重新下载。
+
+
+三、推荐运行环境
+----------------
+
+推荐配置：
+
+- 操作系统：Linux x86_64（推荐 Ubuntu 22.04）
+- Python：3.10
+- NVIDIA GPU：当前主脚本必需，建议至少 8 GB 显存；长视频或高分辨率视频需要更多显存
+- NVIDIA 驱动及 CUDA Toolkit：建议 CUDA 12.1，并确保包含 nvcc
+- PyTorch：2.5.1
+- torchvision：0.20.1
+- FFmpeg：用于把视频转成连续 JPEG 帧
+- C/C++ 编译工具：用于编译 GroundingDINO CUDA 扩展
+
+重要说明：
+
+1. front_end_unit_test.py 虽然根据 torch.cuda.is_available() 设置了 DEVICE，
+   但当前 GroundingDINO 的 load_model() 和 predict() 调用没有显式传入该 DEVICE，
+   其默认值仍是 cuda。因此主脚本当前不能直接在纯 CPU 环境运行。
+2. GroundingDINO 目录中附带的 groundingdino/_C.cpython-310-x86_64-linux-gnu.so
+   是 Python 3.10/Linux 的已编译扩展。换机器后建议按下文重新执行可编辑安装，
+   让扩展与本机 PyTorch、CUDA 和 GPU 架构匹配。
+3. 不建议直接安装 EfficientTAM/requirements.txt。该文件接近原开发环境的完整冻结列表，
+   包含大量平台和 CUDA 细节；按 setup.py 进行可编辑安装更稳妥。
+
+
+四、首次安装（推荐方法）
+------------------------
+
+以下命令假设已经安装 Conda/Miniconda，并且项目位于：
+
+    ~/project/GD_TAM
+
+1. 安装系统工具（Ubuntu/Debian）：
+
+    sudo apt update
+    sudo apt install -y build-essential ffmpeg
+
+CUDA Toolkit 需按本机驱动情况单独安装。执行下面两条命令应能看到 nvcc 路径和版本：
+
+    which nvcc
+    nvcc --version
+
+2. 创建并进入 Python 环境：
+
+    conda create -n gd_tam python=3.10 -y
+    conda activate gd_tam
+    python -m pip install --upgrade pip setuptools wheel ninja
+
+3. 安装 CUDA 12.1 版 PyTorch：
+
+    python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+
+如果本机使用其他 CUDA 版本，请从 PyTorch 官方安装页选择与其匹配的命令，同时保持
+torch 与 torchvision 版本相互兼容。
+
+4. 设置 CUDA_HOME。
+
+如果 which nvcc 输出 /usr/local/cuda-12.1/bin/nvcc，则执行：
+
+    export CUDA_HOME=/usr/local/cuda-12.1
+    export PATH="$CUDA_HOME/bin:$PATH"
+
+5. 从项目根目录安装两个子项目及其依赖：
+
+    cd ~/project/GD_TAM
+    python -m pip install -e ./GroundingDINO
+    python -m pip install -e ./EfficientTAM
+
+以上安装会包含主算法所需的主要 Python 依赖，例如：
+
+- torch、torchvision
+- numpy、Pillow、opencv-python
+- transformers、timm、addict、yapf、pycocotools
+- hydra-core、omegaconf、iopath
+- supervision、imageio、imageio-ffmpeg、moviepy、tqdm
+
+6. 安装后自检：
+
+    python -c "import torch; print('torch=', torch.__version__, 'cuda=', torch.version.cuda, 'GPU可用=', torch.cuda.is_available()); import groundingdino._C; from groundingdino.util.inference import load_model; from efficient_track_anything.build_efficienttam import build_efficienttam_video_predictor; print('依赖导入成功')"
+
+其中“GPU可用”必须为 True，并且最后应输出“依赖导入成功”。
+
+
+五、项目路径要求
+----------------
+
+front_end_unit_test.py 当前包含以下固定路径：
+
+    PROJECT_ROOT = os.path.expanduser("~/project/GD_TAM")
+
+最省事的方式是把整个 GD_TAM 文件夹放在 ~/project/GD_TAM。
+
+如果项目位于其他位置，运行前必须修改 front_end_unit_test.py 中的 PROJECT_ROOT。
+为了让项目移动到任意位置后都能工作，可将该行改为：
+
+    PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+六、准备输入视频帧
+------------------
+
+主脚本读取 data/test_frames，而不是直接读取 data/raw_videos 中的 MP4。
+项目初始提供的 test_frames 目录可能为空，因此首次运行前需要抽帧。
+
+在项目根目录执行：
+
+    cd ~/project/GD_TAM
+    mkdir -p data/test_frames outputs/test_results
+    ffmpeg -i data/raw_videos/1.mp4 -q:v 2 -start_number 0 data/test_frames/%05d.jpg
+
+随项目提供的 1.mp4 为 1280×720、30 FPS、约 15.7 秒，共约 471 帧。
+
+输入帧必须满足以下要求：
+
+- 使用 JPG/JPEG；不要使用 PNG（主脚本会枚举 PNG，但 EfficientTAM 的目录加载器不接受 PNG）；
+- 文件名主体必须是纯数字，因为 EfficientTAM 会把文件名转成整数排序；
+- 建议使用 00000.jpg、00001.jpg、00002.jpg……这种格式；
+- 所有帧应来自同一视频，并保持相同尺寸；
+- 更换视频时，先确保 test_frames 中没有混入上一个视频的旧帧。
+
+若显存不足，可降低抽帧帧率，例如每秒保留 10 帧：
+
+    ffmpeg -i data/raw_videos/1.mp4 -vf fps=10 -q:v 2 -start_number 0 data/test_frames/%05d.jpg
+
+
+七、设置检测目标和阈值
+----------------------
+
+打开 front_end_unit_test.py，可在“路径与参数配置”部分修改：
+
+    TEXT_PROMPT = "person"
+    BOX_THRESHOLD = 0.35
+    TEXT_THRESHOLD = 0.25
+
+- TEXT_PROMPT：需要检测并跟踪的目标，建议使用简短英文，例如 person、car、dog；
+- BOX_THRESHOLD：候选框置信度阈值；
+- TEXT_THRESHOLD：文本匹配阈值；
+- 如果未检测到目标，可先确认提示词正确，再小幅降低两个阈值；
+- 当前脚本只选择 GroundingDINO 返回列表中的第一个候选框，并只跟踪一个目标；
+  GroundingDINO 的当前 predict() 实现不会按置信度重新排序候选框，因此该候选框不一定是全局最高分。
+
+
+八、运行算法
+------------
+
+确认已经激活环境、输入帧存在并且 nvidia-smi 正常后，在项目根目录执行：
+
+    cd ~/project/GD_TAM
+    conda activate gd_tam
+    CUDA_VISIBLE_DEVICES=0 python front_end_unit_test.py
+
+程序将依次输出：
+
+1. GroundingDINO 加载信息；
+2. EfficientTAM 加载信息；
+3. 第 0 帧目标类别、置信度及检测框；
+4. 每隔 50 帧的传播进度；
+5. 成功信息及输出目录。
+
+
+九、输出结果
+------------
+
+默认输出到 outputs/test_results：
+
+- result_00000.jpg、result_00001.jpg……：逐帧可视化结果；
+- trajectory.json：每一帧的椭圆拟合参数。
+
+可视化颜色（OpenCV BGR）：
+
+- 绿色半透明区域：EfficientTAM 分割掩码；
+- 红色曲线：最大掩码轮廓的拟合椭圆；
+- 蓝色点：拟合椭圆中心。
+
+trajectory.json 中每帧的数据格式为：
+
+    {
+        "frame_00000": {
+            "x": 640.0,
+            "y": 360.0,
+            "a": 120.0,
+            "b": 260.0,
+            "theta": 15.0
+        }
+    }
+
+字段含义：
+
+- x、y：椭圆中心的图像像素坐标；
+- a、b：OpenCV fitEllipse 返回的两条轴的完整长度，单位为像素（不是半轴长度）；
+- theta：椭圆旋转角，单位为度；
+- 某帧的值为 null：该帧没有有效轮廓，或最大轮廓少于 5 个点，无法拟合椭圆。
+
+如需把结果图片重新合成为视频，可执行：
+
+    ffmpeg -framerate 30 -i outputs/test_results/result_%05d.jpg -c:v libx264 -pix_fmt yuv420p outputs/result.mp4
+
+如果抽帧时使用了 fps=10，则把上面命令中的 30 改为 10。
+
+
+十、常见问题
+------------
+
+1. 报错“目录 .../data/test_frames 为空”
+
+   原因：还没有抽帧，或 PROJECT_ROOT 指向错误位置。
+   处理：按“六、准备输入视频帧”执行 FFmpeg 命令，并检查路径。
+
+2. 报错“invalid literal for int()”
+
+   原因：test_frames 中存在非数字文件名，例如 frame_1.jpg。
+   处理：将帧重新导出为 00000.jpg、00001.jpg……
+
+3. 报错“NameError: name '_C' is not defined”、无法导入 groundingdino._C，
+   或出现 undefined symbol
+
+   原因：GroundingDINO 扩展未编译，或附带的扩展与本机 Python/PyTorch/CUDA 不匹配。
+   处理：确认 python --version 为 3.10、CUDA_HOME 正确、nvcc 可用，然后重新编译安装：
+
+       cd ~/project/GD_TAM
+       python -m pip install -v --no-build-isolation -e ./GroundingDINO
+
+4. torch.cuda.is_available() 为 False
+
+   检查 nvidia-smi、NVIDIA 驱动、PyTorch CUDA 构建和 CUDA_VISIBLE_DEVICES。
+   当前主脚本不建议在 CPU 环境运行。
+
+5. 报错 CUDA out of memory
+
+   关闭占用 GPU 的其他程序；降低抽帧帧率或缩短视频。进一步节省显存时，可把脚本中的：
+
+       sam2_predictor.init_state(video_path=FRAME_DIR)
+
+   改为：
+
+       sam2_predictor.init_state(
+           video_path=FRAME_DIR,
+           offload_video_to_cpu=True,
+           offload_state_to_cpu=True
+       )
+
+   这样会减少显存占用，但运行速度会下降。
+
+6. 提示“未能检测到目标”
+
+   检查第 0 帧中是否确实出现目标；使用准确的英文提示词；必要时逐步降低
+   BOX_THRESHOLD 和 TEXT_THRESHOLD。该流程只在第 0 帧初始化检测，因此目标必须在第 0 帧可见。
+
+7. 运行后输出目录中混有旧结果
+
+   主脚本不会自动清空 outputs/test_results。重新实验前请自行备份或清理旧的
+   result_*.jpg 和 trajectory.json，避免把不同实验结果混在一起。
+
+
+十一、权重缺失时的下载方法（可选）
+----------------------------------
+
+仅在 checkpoints 中权重缺失时使用：
+
+    cd ~/project/GD_TAM/checkpoints
+    wget -O efficienttam_s.pt https://huggingface.co/yunyangx/efficient-track-anything/resolve/main/efficienttam_s.pt
+    wget -O groundingdino_swint_ogc.pth https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
+
+本项目当前附带权重的 SHA-256 校验值为：
+
+    2b572be30d9e96ee29c8d785fe157c6b079ede7d56fbc8a3671d4120e63c89cd  efficienttam_s.pt
+    3b3ca2563c77c69f651d7bd133e97139c186df06231157a64c507099c52bc799  groundingdino_swint_ogc.pth
+
+可在 checkpoints 目录中执行以下命令检查文件是否损坏：
+
+    sha256sum efficienttam_s.pt groundingdino_swint_ogc.pth
+
+
+十二、最短使用流程汇总
+----------------------
+
+完成“首次安装”后，每次使用只需：
+
+    cd ~/project/GD_TAM
+    conda activate gd_tam
+    mkdir -p data/test_frames outputs/test_results
+    ffmpeg -i data/raw_videos/1.mp4 -q:v 2 -start_number 0 data/test_frames/%05d.jpg
+    CUDA_VISIBLE_DEVICES=0 python front_end_unit_test.py
+
+然后查看：
+
+    outputs/test_results/trajectory.json
+    outputs/test_results/result_*.jpg

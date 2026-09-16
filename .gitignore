@@ -1,0 +1,23 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# OS/editor metadata
+.DS_Store
+.idea/
+.vscode/
+
+# Locally compiled native extensions
+*.so
+
+# Bundled/duplicate dependencies and archives (install from redme.txt instead)
+/libtorch/
+/EfficientTAM-main.zip
+
+# Generated frames and inference results
+/data/test_frames/
+/outputs/
+
